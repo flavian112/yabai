@@ -1,6 +1,7 @@
 bool workspace_event_handler_begin(void **context)
 {
     NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    _workspace_macos_major_version = (int) version.majorVersion;
 #define SUPPORT_MACOS_VERSION(name, major_version) _workspace_is_macos_version_##name = version.majorVersion == major_version;
     SUPPORTED_MACOS_VERSION_LIST
 #undef SUPPORT_MACOS_VERSION

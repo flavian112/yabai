@@ -308,17 +308,10 @@ int main(int argc, char **argv)
         error("yabai: could not start mouse handler! abort..\n");
     }
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         mission_control_observe();
 
-        if (workspace_is_macos_ventura() ||
-            workspace_is_macos_sonoma() ||
-            workspace_is_macos_sequoia() ||
-            workspace_is_macos_tahoe()) {
+        if (workspace_is_macos_ventura_or_newer()) {
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1327, NULL);
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1328, NULL);
         }
@@ -329,7 +322,7 @@ int main(int argc, char **argv)
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 804, NULL);
     }
 
@@ -337,7 +330,7 @@ int main(int argc, char **argv)
     space_manager_begin(&g_space_manager);
     window_manager_begin(&g_space_manager, &g_window_manager);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         update_window_notifications();
     }
 
