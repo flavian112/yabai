@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+#
+# Check the scripting addition's Dock patterns offline, without injecting anything.
+#
+# Reads the offsets and patterns for a macOS major version from src/osax/arm64_payload.m
+# and replays the search done by hex_find_seq() (src/osax/payload.m) against every arm64e
+# slice of the Dock binary: start at <offset> into __TEXT (file offset 0 of the slice),
+# scan byte by byte, a token starting with '?' is a whole-byte wildcard, the first match
+# wins, give up after 0x1286a0 bytes.
+#
+# A pattern is reported as ambiguous when it also matches elsewhere in the slice; the
+# result then depends on the start offset, which tends to break silently on Dock updates.
+#
+# Usage: scripts/check-sa-patterns [MAJOR_VERSION]   (default: the running macOS)
+#
+
+import platform
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DOCK = "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
+PAYLOAD = Path(__file__).resolve().parent.parent / "src/osax/arm64_payload.m"
+WINDOW = 0x1286A0
+NAMES = ["dock_spaces", "dppm", "fix_animation", "add_space", "remove_space", "move_space", "set_front_window"]
+
+
+def branch_value(source, function, major):
+    """Return the first `return` expression of the `majorVersion == major` branch in function."""
+    body = re.search(rf"\bget_{function}\(NSOperatingSystemVersion os_version\) \{{(.*?)\n\}}", source, re.S)
+    if not body:
+        sys.exit(f"error: get_{function} not found in {PAYLOAD}")
+    branch = re.search(rf"majorVersion == {major}\b[^{{]*\{{(.*?)\breturn ([^;]+);", body.group(1), re.S)
+    if not branch:
+        return None, False
+    nested = "minorVersion" in branch.group(1)
+    return branch.group(2).strip(), nested
+
+
+def compile_pattern(pattern):
+    tokens = pattern.split()
+    regex = b"".join(b"." if t.startswith("?") else re.escape(bytes([int(t, 16)])) for t in tokens)
+    return re.compile(regex, re.S), len(tokens)
+
+
+def dock_slices():
+    archs = subprocess.run(["lipo", "-archs", DOCK], capture_output=True, text=True, check=True).stdout.split()
+    for arch in (a for a in archs if a.startswith("arm64")):
+        with tempfile.NamedTemporaryFile() as tmp:
+            subprocess.run(["lipo", DOCK, "-thin", arch, "-output", tmp.name], check=True)
+            yield arch, Path(tmp.name).read_bytes()
+
+
+def main():
+    major = int(sys.argv[1]) if len(sys.argv) > 1 else int(platform.mac_ver()[0].split(".")[0])
+    source = PAYLOAD.read_text()
+
+    table = []
+    for name in NAMES:
+        offset, _ = branch_value(source, f"{name}_offset", major)
+        pattern, nested = branch_value(source, f"{name}_pattern", major)
+        if offset is None or pattern is None:
+            sys.exit(f"error: no macOS {major} branch for {name} in {PAYLOAD.name}")
+        pattern = None if pattern == "NULL" else pattern.strip('"')
+        table.append((name, int(offset, 0), pattern, nested))
+
+    failures = 0
+    print(f"macOS {platform.mac_ver()[0]}, checking patterns for macOS {major}")
+    for arch, data in dock_slices():
+        print(f"\n{arch}")
+        for name, offset, pattern, nested in table:
+            if pattern is None:
+                print(f"  {name:17} disabled")
+                continue
+            rx, length = compile_pattern(pattern)
+            end = offset + WINDOW + length - 1
+            first = rx.search(data, offset, end)
+            total = sum(1 for _ in rx.finditer(data))
+            note = "  (branch has minorVersion cases; checked the first one)" if nested else ""
+            if first is None:
+                failures += 1
+                print(f"  {name:17} NOT FOUND from {offset:#x} ({total} match(es) elsewhere){note}")
+            elif total > 1:
+                failures += 1
+                print(f"  {name:17} AMBIGUOUS: first match {first.start():#x}, {total} matches in slice{note}")
+            else:
+                print(f"  {name:17} ok at {first.start():#x}{note}")
+
+    print("\nall patterns ok" if failures == 0 else f"\n{failures} problem(s)")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
