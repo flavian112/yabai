@@ -1,0 +1,94 @@
+#!/bin/sh
+#
+# release
+#
+# Build, sign and notarize a release of this fork, packaged like the upstream
+# release archives (archive/bin/yabai, archive/doc, archive/examples).
+#
+#   scripts/release              build, sign, notarize and package into dist/
+#   scripts/release --publish    additionally push, tag and create the GitHub release
+#
+# The version comes from `yabai --version` (MAJOR.MINOR.PATCH + VERSION_SUFFIX in
+# src/yabai.c); bump VERSION_SUFFIX before every release.
+#
+# Environment:
+#   SIGN_IDENTITY    codesigning identity (default: the first "Developer ID Application")
+#   NOTARY_PROFILE   notarytool keychain profile (default: notary)
+#
+
+set -eu
+
+cd "$(dirname "$0")/.."
+
+publish=false
+case "${1:-}" in
+  "") ;;
+  --publish) publish=true ;;
+  *) echo "usage: scripts/release [--publish]" >&2; exit 2 ;;
+esac
+
+identity="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -n 1)}"
+profile="${NOTARY_PROFILE:-notary}"
+[ -n "$identity" ] || { echo "error: no Developer ID Application identity found" >&2; exit 1; }
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "error: working tree is not clean" >&2
+  exit 1
+fi
+
+echo "==> Checking scripting addition patterns against this Dock"
+scripts/check-sa-patterns
+
+echo "==> Building"
+make install >/dev/null
+version="$(bin/yabai --version)"            # yabai-v7.1.25-flavian.1
+tag="${version#yabai-}"                     # v7.1.25-flavian.1
+
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  echo "error: tag $tag already exists; bump VERSION_SUFFIX in src/yabai.c" >&2
+  exit 1
+fi
+
+echo "==> Signing $version with: $identity"
+codesign --force --sign "$identity" --options runtime --timestamp bin/yabai
+codesign --verify --strict bin/yabai
+
+dist="dist"
+rm -rf "$dist" archive
+mkdir -p "$dist"
+
+echo "==> Notarizing"
+ditto -c -k --keepParent bin/yabai "$dist/notarize.zip"
+xcrun notarytool submit "$dist/notarize.zip" --keychain-profile "$profile" --wait
+rm -f "$dist/notarize.zip"
+codesign --verify --strict --check-notarization bin/yabai
+
+echo "==> Packaging"
+mkdir -p archive/bin
+cp bin/yabai archive/bin/
+cp -r doc examples archive/
+tar -czf "$dist/$version.tar.gz" archive
+rm -rf archive
+sha256="$(shasum -a 256 "$dist/$version.tar.gz" | cut -d ' ' -f 1)"
+
+echo "==> Built $dist/$version.tar.gz"
+echo "    sha256 $sha256"
+
+if ! $publish; then
+  echo "==> Not published (run with --publish to push, tag and create the GitHub release)"
+  exit 0
+fi
+
+echo "==> Publishing $tag"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+git push origin "$branch"
+git tag -s "$tag" -m "$version"
+git push origin "$tag"
+gh release create "$tag" "$dist/$version.tar.gz" \
+  --repo "$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')" \
+  --title "$version" \
+  --notes "Signed with a Developer ID and notarized. Changes on top of upstream: \`git log upstream/master..$tag\`."
+
+echo "==> Formula values for the tap:"
+echo "    url \"https://github.com/$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')/releases/download/$tag/$version.tar.gz\""
+echo "    sha256 \"$sha256\""
