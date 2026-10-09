@@ -279,13 +279,24 @@ static int scripting_addition_perform_validation(void)
     }
 
     if (string_equals(version, OSAX_VERSION)) {
-        if ((attrib & OSAX_ATTRIB_ALL) == OSAX_ATTRIB_ALL) {
-            notify("scripting-addition", "payload v%s", version);
+        if ((attrib & OSAX_ATTRIB_REQUIRED) != OSAX_ATTRIB_REQUIRED) {
+            notify("scripting-addition", "payload (0x%X) doesn't support this macOS version!", attrib);
+            return 1;
+        }
+
+        if ((attrib & OSAX_ATTRIB_ALL) != OSAX_ATTRIB_ALL) {
+            notify("scripting-addition", "payload v%s, unavailable on this macOS version:%s%s%s%s%s%s", version,
+                   (attrib & OSAX_ATTRIB_DPPM)       ? "" : " desktop-picture-manager",
+                   (attrib & OSAX_ATTRIB_ADD_SPACE)  ? "" : " space-create",
+                   (attrib & OSAX_ATTRIB_REM_SPACE)  ? "" : " space-destroy",
+                   (attrib & OSAX_ATTRIB_MOV_SPACE)  ? "" : " space-move",
+                   (attrib & OSAX_ATTRIB_SET_WINDOW) ? "" : " set-front-window",
+                   (attrib & OSAX_ATTRIB_ANIM_TIME)  ? "" : " animation-fix");
             return 0;
         }
 
-        notify("scripting-addition", "payload (0x%X) doesn't support this macOS version!", attrib);
-        return 1;
+        notify("scripting-addition", "payload v%s", version);
+        return 0;
     }
 
     if (!is_latest_version_installed) {
@@ -460,8 +471,17 @@ bool scripting_addition_destroy_space(uint64_t sid)
     return sa_payload_send(SA_OPCODE_SPACE_DESTROY);
 }
 
+static bool scripting_addition_supports(uint32_t required)
+{
+    uint32_t attrib = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    return scripting_addition_request_handshake(version, &attrib) && (attrib & required) == required;
+}
+
 bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid, uint64_t src_prev_sid, bool focus)
 {
+    if (!scripting_addition_supports(OSAX_ATTRIB_MOV_SPACE | OSAX_ATTRIB_DPPM)) return false;
+
     sa_payload_init();
     pack(src_sid);
     pack(dst_sid);
@@ -472,6 +492,8 @@ bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid
 
 bool scripting_addition_move_space_after_space(uint64_t src_sid, uint64_t dst_sid, bool focus)
 {
+    if (!scripting_addition_supports(OSAX_ATTRIB_MOV_SPACE | OSAX_ATTRIB_DPPM)) return false;
+
     uint64_t dummy_sid = 0;
     sa_payload_init();
     pack(src_sid);
